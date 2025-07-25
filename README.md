@@ -2,5 +2,6 @@
 
 simple subpixel accurate HDR creator
 
-![image](doc/app_example.png)
+![image](doc/doc.png)
+
 
