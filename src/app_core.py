@@ -17,11 +17,11 @@ class APPCore:
         pass
 
 
-    def load_files(self, path):
+    def load_files(self, path, start_idx = 0, end_idx = -1):
         print("\n\n")
         print("loading files")
         self.path = path
-        self.images = ImagesLoaderRaw(path)
+        self.images = ImagesLoaderRaw(path, start_idx=start_idx, end_idx=end_idx)
 
 
         # rate images exposures and information quality
@@ -63,7 +63,37 @@ class APPCore:
 
     def get_result(self): 
         return self._normalise(self.result_rect)
-        
+    
+
+    def process_brackets(self, path, num_stacking):
+
+
+        print(path)
+        image_extensions = {'.ARW', '.arw'}
+        image_paths = []
+
+        for dirpath, dirnames, filenames in os.walk(path):
+            for filename in filenames:
+                _, ext = os.path.splitext(filename)
+                if ext in image_extensions:
+                    full_path = os.path.join(dirpath, filename)
+                    image_paths.append(full_path)
+
+        image_paths.sort()
+
+        start_idx = 0
+        end_idx   = num_stacking
+        for n in range(0, len(image_paths), num_stacking):
+            print("\n\n")
+            print("processing ", n//num_stacking, " from", len(image_paths)//num_stacking)
+            self.load_files(path, start_idx, end_idx)
+            self.process()
+            self.export()
+            self.export_cropped()
+            
+            start_idx+= num_stacking
+            end_idx+= num_stacking
+
 
     def process(self):
         print("\n\n")
