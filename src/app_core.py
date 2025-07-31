@@ -17,11 +17,17 @@ class APPCore:
         pass
 
 
-    def load_files(self, path, start_idx = 0, end_idx = -1):
+    def load_files(self, files_to_load, start_idx = 0, end_idx = -1):
         print("\n\n")
         print("loading files")
-        self.path = path
-        self.images = ImagesLoaderRaw(path, start_idx=start_idx, end_idx=end_idx)
+
+        if isinstance(files_to_load, str):
+            self.path = os.path.dirname(files_to_load)
+        else:
+            self.path   = os.path.dirname(files_to_load[0])
+            
+        self.images = ImagesLoaderRaw(files_to_load, start_idx=start_idx, end_idx=end_idx)
+    
 
 
         # rate images exposures and information quality
@@ -49,13 +55,14 @@ class APPCore:
         self.thumbnails = []
         for n in range(len(self.images)):
             img = numpy.array(self.images[n], dtype=numpy.float32)
-            img = self._normalise(img)
-            
             h = img.shape[0]//8
             w = img.shape[1]//8
                         
             img = cv2.resize(img, (w, h), interpolation=cv2.INTER_AREA)
 
+
+            img = self._normalise(img)
+            
             self.thumbnails.append(img)
 
         return self.thumbnails
@@ -65,10 +72,7 @@ class APPCore:
         return self._normalise(self.result_rect)
     
 
-    def process_brackets(self, path, num_stacking):
-
-
-        print(path)
+    def process_batch(self, path, num_stacking):
         image_extensions = {'.ARW', '.arw'}
         image_paths = []
 
@@ -79,7 +83,7 @@ class APPCore:
                     full_path = os.path.join(dirpath, filename)
                     image_paths.append(full_path)
 
-        image_paths.sort()
+        image_paths.sort()  
 
         start_idx = 0
         end_idx   = num_stacking
@@ -100,7 +104,6 @@ class APPCore:
         print("warping images")
         align = ImagesAlign()
 
-        
         
         warped_images, scores, rect = align.process_all(self.images, self.best_image_idx, cv2.MOTION_HOMOGRAPHY, 2)
 
@@ -199,5 +202,8 @@ class APPCore:
 
 
     def _normalise(self, x):
-        y = (x - numpy.min(x))/(numpy.max(x) - numpy.min(x))
-        return 1.5*y
+        min = numpy.min(x)
+        max = numpy.max(x)
+
+        y = (x - min)/(max - min)
+        return y

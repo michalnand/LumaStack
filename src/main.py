@@ -4,7 +4,8 @@ if __name__ == "__main__":
 
     app = APPCore()
 
-    app.process_brackets("images/panorama/01/", 5)
+    path = "/Users/michal/Pictures/2025_26_7_sulovske_skaly/"
+    app.process_batch(path, 3)
 
     '''
     app.load_files("images_a/")

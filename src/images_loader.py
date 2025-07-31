@@ -57,8 +57,13 @@ class ImagesLoader:
 
 class ImagesLoaderRaw:
      
-    def __init__(self, path, size = None, start_idx = 0, end_idx = -1):
-        self.file_names = self._find_images(path)
+    def __init__(self, file_names, size = None, start_idx = 0, end_idx = -1):
+
+        if isinstance(file_names, str):
+            self.file_names = self._find_images(file_names)
+        else:
+            self.file_names = list(file_names)
+            self.file_names.sort()
 
         if end_idx != -1:
             self.file_names = self.file_names[start_idx:end_idx]
@@ -79,17 +84,26 @@ class ImagesLoaderRaw:
             )
 
             im = rgb.astype(numpy.float32) / 65535.0  # Normalize to [0,1]
-            images.append(im)
+
+          
 
             with open(f_name, 'rb') as f:
                 tags = exifread.process_file(f, stop_tag='EXIF ExposureTime')
                 ev = tags.get('EXIF ExposureTime')
                 iso_val = tags.get('EXIF ISOSpeedRatings')
+                orientation = tags.get('Image Orientation', None)
                 
             exposure_val = float(ev.values[0].num) / float(ev.values[0].den)
 
             iso_val = float(str(iso_val))
 
+            print("orientation", orientation)
+
+            if "90" in str(orientation):
+                im = numpy.rot90(im, 1)  # Rotate 90 CW
+                
+
+            images.append(im)
 
             metadata.append(tags)
 

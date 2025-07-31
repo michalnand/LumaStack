@@ -1,23 +1,22 @@
 import sys
 import os
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QFileDialog, QAction, QLabel, QVBoxLayout,
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QFileDialog, QLabel, QVBoxLayout,
     QPushButton, QWidget, QHBoxLayout, QScrollArea, QGridLayout
 )
-from PyQt5.QtGui import QPixmap, QImage
-from PyQt5.QtCore import Qt
+from PySide6.QtGui import QPixmap, QImage, QAction  # QAction moved here in Qt6
+from PySide6.QtCore import Qt
 
 from app_core import *
 
-import numpy 
-
+import numpy
 
 
 def numpy_to_qpixmap(img_np):
     img = numpy.clip(img_np * 255, 0, 255).astype(numpy.uint8)
     h, w, _ = img.shape
     qimg = QImage(img.data, w, h, 3 * w, QImage.Format_RGB888)
-    return QPixmap.fromImage(qimg)
+    return QPixmap.fromImage(qimg)  
 
 
 class MainWindow(QMainWindow):
@@ -119,20 +118,24 @@ class MainWindow(QMainWindow):
 
     def dropEvent(self, event):
         urls = event.mimeData().urls()
+        
         if urls:
-            local_file = urls[0].toLocalFile()
-            folder = os.path.dirname(local_file)
-            if os.path.isdir(folder):
-                self.app.load_files(folder)
-                self.show_thumbnails()
+            files = []
+            for n in range(len(urls)):
+                files.append(str(urls[n].toLocalFile()))
+
+            self.app.load_files(files)
+            self.show_thumbnails()
+
 
 if __name__ == "__main__":
 
     app_core = APPCore()
 
-
     qt_app = QApplication(sys.argv)
+    
     window = MainWindow(app_core)
     window.resize(1000, 600)
     window.show()
+
     sys.exit(qt_app.exec_())

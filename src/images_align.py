@@ -20,7 +20,7 @@ class ImagesAlign:
             if n != ref_idx:
                 img_dest    = images[n]
 
-                warped_img, w, score = self.process(img_base, img_dest,  warp_mode, scale, iterations)
+                warped_img, w, score = self.process(img_base, img_dest, scale)
                                 
                 warped_images.append(warped_img)
                 w_matrices.append(w)
@@ -41,78 +41,127 @@ class ImagesAlign:
         return warped_images, scores, rect
     
 
-    def process(self, ref_img, target_img, warp_mode=cv2.MOTION_AFFINE, scale = 2, iterations=128):
-        img_result, w_mat = self._align_ecc(ref_img, target_img, warp_mode, scale, iterations)
+    def process(self, ref_img, target_img, scale = 2):        
+        h, w, _ = ref_img.shape
 
+        # preprocess images
+        # grayscale, uint8, clahe equalisation, resize
+
+        ref_img_gray    = self._preprocess_image(ref_img, scale)
+        target_img_gray = self._preprocess_image(target_img, scale)
+
+        
+        # coarse alignment based on keypoints, SIFT detector, BF keypoints matcher
+        w_mat = self._align_coarse(ref_img_gray, target_img_gray)
+
+        # fine alingment based on ECC
+        w_mat = self._align_ecc(ref_img_gray, target_img_gray, w_mat, iterations=64)
+
+        # scale matrix
+        S = numpy.array([[scale, 0, 0],
+                        [0, scale, 0],
+                        [0, 0, 1]], dtype=numpy.float32)
+
+        # upscale the matrix
+        warp_matrix = S @ w_mat @ numpy.linalg.inv(S)
+        
+        
+        # warping
+        align_coarse = cv2.warpPerspective(target_img, warp_matrix, (w, h), flags=cv2.INTER_CUBIC + cv2.WARP_INVERSE_MAP)
+
+        # non homogenous warping using optical flow
+        ref_img_gray    = self._preprocess_image(ref_img, 1)
+        target_img_gray = self._preprocess_image(align_coarse, 1)
+
+        
+        flow = cv2.calcOpticalFlowFarneback(
+            ref_img_gray,
+            target_img_gray,
+            None,              # Output flow
+            pyr_scale=0.5,     # Pyramid scale
+            levels=3,          # Number of pyramid layers
+            winsize=15,        # Averaging window size
+            iterations=32,     # Iterations at each pyramid level
+            poly_n=5,          # Size of pixel neighborhood
+            poly_sigma=1.2,    # Standard deviation for Gaussian
+            flags=0
+        )
+        
+        h, w = flow.shape[:2]
+        map_x, map_y = numpy.meshgrid(numpy.arange(w), numpy.arange(h))
+        map_x = map_x + flow[..., 0]
+        map_y = map_y + flow[..., 1]
+        img_result = cv2.remap(numpy.array(align_coarse), map_x.astype(numpy.float32), map_y.astype(numpy.float32), interpolation=cv2.INTER_LINEAR)
+                        
+
+
+     
         score = self._score(ref_img, img_result)
 
-        return img_result, w_mat, score
+        warp_matrix = numpy.eye(3)
 
-
+        return img_result, warp_matrix, score
     
 
-    def _align_ecc(self, ref_img, target_img, warp_mode=cv2.MOTION_AFFINE, scale = 1, iterations=128):
-        """
-        Aligns target_img to ref_img using ECC with downsampling for speed.
 
-        :param ref_img: Reference image (H, W, 3)
-        :param target_img: Target image (H, W, 3)
-        :param warp_mode: cv2.MOTION_HOMOGRAPHY or cv2.MOTION_AFFINE
-        :param scale: Downscale factor (int > 1)
-        :return: aligned image, warp matrix (full resolution)
-        """
-        gray_ref = cv2.cvtColor(ref_img, cv2.COLOR_BGR2GRAY).astype(numpy.float32)
-        gray_target = cv2.cvtColor(target_img, cv2.COLOR_BGR2GRAY).astype(numpy.float32)
-
-        h, w = gray_ref.shape
+    def _preprocess_image(self, x, scale):
+        h, w, _ = x.shape
         h_small, w_small = h // scale, w // scale
 
-        ref_small = cv2.resize(gray_ref, (w_small, h_small), interpolation=cv2.INTER_AREA)
-        target_small = cv2.resize(gray_target, (w_small, h_small), interpolation=cv2.INTER_AREA)
+        x   = cv2.cvtColor(x, cv2.COLOR_BGR2GRAY)
+        x   = numpy.clip(255*x, 0, 255).astype(numpy.uint8)
 
+        clahe   = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        x       = clahe.apply(x)
+
+        x   = cv2.resize(x, (w_small, h_small), interpolation=cv2.INTER_AREA)
+
+        return x
+
+
+    def _align_coarse(self, ref_img, target_img):
+    
         # Init warp matrix (low-res)
-        if warp_mode == cv2.MOTION_HOMOGRAPHY:
-            warp_matrix_small = numpy.eye(3, 3, dtype=numpy.float32)
-        else:
-            warp_matrix_small = numpy.eye(2, 3, dtype=numpy.float32)
+        warp_matrix = numpy.eye(3, 3, dtype=numpy.float32)
+        
+        # 1, Coarse matching using keypoints, fast method
+        sift = cv2.SIFT_create()
+        kp1, des1 = sift.detectAndCompute(ref_img, None)
+        kp2, des2 = sift.detectAndCompute(target_img, None)
+
+        # Match and estimate affine
+        bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
+        matches = bf.match(des1, des2)
+        if len(matches) >= 30:   
+            pts1 = numpy.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+            pts2 = numpy.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+
+            matrix, _ = cv2.estimateAffinePartial2D(pts2, pts1)
+            if matrix is not None:
+                warp_matrix[:2] = matrix
+                print("matching", len(matches))
+
+        return warp_matrix
+    
+
+    def _align_ecc(self, ref_img, target_img, warp_initial, iterations=128):
+
+        ref_img     = numpy.array(ref_img/255.0, dtype=numpy.float32)
+        target_img = numpy.array(target_img/255.0, dtype=numpy.float32)
 
         criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, iterations, 1e-7)
 
         try:
-            cc, warp_matrix_small = cv2.findTransformECC(
-                ref_small, target_small, warp_matrix_small,
-                motionType=warp_mode,
+            cc, warp_matrix = cv2.findTransformECC(
+                ref_img, target_img, numpy.array(warp_initial, dtype=numpy.float32),
+                motionType=cv2.MOTION_HOMOGRAPHY,
                 criteria=criteria
             )
         except cv2.error as e:
             print("ECC failed:", e)
-            return None, None
-
-        # Rescale warp matrix to original resolution
-        if warp_mode == cv2.MOTION_HOMOGRAPHY:
-            S = numpy.array([[scale, 0, 0],
-                        [0, scale, 0],
-                        [0, 0, 1]], dtype=numpy.float32)
-
-            # Correctly upscale the matrix
-            #warp_matrix = numpy.linalg.inv(S) @ warp_matrix_small @ S
-            warp_matrix = S @ warp_matrix_small @ numpy.linalg.inv(S)
-
-
-        else:  # MOTION_AFFINE
-            warp_matrix = warp_matrix_small.copy()
-            warp_matrix[0, 2] *= scale
-            warp_matrix[1, 2] *= scale
-
-        # Warp full-resolution image
-        if warp_mode == cv2.MOTION_HOMOGRAPHY:
-            aligned = cv2.warpPerspective(target_img, warp_matrix, (w, h),
-                                        flags=cv2.INTER_CUBIC + cv2.WARP_INVERSE_MAP)
-        else:
-            aligned = cv2.warpAffine(target_img, warp_matrix, (w, h),
-                                    flags=cv2.INTER_CUBIC + cv2.WARP_INVERSE_MAP)
-
-        return aligned, warp_matrix
+        
+        return warp_matrix
+    
 
 
     def _score(self, img_a, img_b, scale=8):
@@ -133,6 +182,12 @@ class ImagesAlign:
         score = ((img_a_norm - img_b_norm)**2).mean()
 
         return score
+    
+    def _get_edges(self, img):
+        img = (img - img.mean())/(img.std() + 1e-6)
+        img = cv2.Laplacian(img, cv2.CV_32F)
+
+        return img
 
     def _compute_mask(self, images, ref_id):
         result = []
@@ -225,3 +280,19 @@ class ImagesAlign:
             raise ValueError("No common inner rectangle found; transformed images do not overlap.")
 
         return inner_min_x, inner_min_y, inner_max_x, inner_max_y
+    
+
+    def _normalise(self, x):
+       
+        max_v = numpy.max(x)
+        min_v = numpy.min(x)
+
+        y = (x - min_v)/(max_v - min_v)
+
+        y = numpy.clip(y, 0, 1).astype(numpy.float32)
+
+        print("original ", numpy.min(x), numpy.max(x))
+        print("normalised ", numpy.min(y), numpy.max(y))
+        print("\n")
+
+        return y

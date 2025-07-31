@@ -11,6 +11,8 @@ class ImagesMerge:
 
         result = numpy.clip(result, 0.0, 1000.0)
 
+        result = self._normalise(result)
+
         # crop
         if rect is not None:
             top         = rect["top"]
@@ -93,3 +95,12 @@ class ImagesMerge:
         '''
          
         return result
+    
+
+    def _normalise(self, x):
+        min = numpy.min(x)
+        max = numpy.max(x)
+
+        y = (x - min)/(max - min)
+
+        return y
